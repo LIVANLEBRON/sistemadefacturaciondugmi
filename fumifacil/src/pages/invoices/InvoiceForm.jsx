@@ -18,7 +18,8 @@ import {
   Stepper,
   Step,
   StepLabel,
-  CircularProgress
+  CircularProgress,
+  Snackbar
 } from '@mui/material';
 import { 
   ArrowBack as ArrowBackIcon,
@@ -33,6 +34,10 @@ import { db, storage, functions } from '../../firebase/firebase';
 import { httpsCallable } from 'firebase/functions';
 import { v4 as uuidv4 } from 'uuid';
 import { format } from 'date-fns';
+// Importar servicios de facturación electrónica
+import { createInvoice, sendInvoiceToDGII, generateInvoicePDF } from '../../utils/ecf/invoiceService';
+import { validateInvoice, validateFiscalId, formatFiscalId } from '../../utils/ecf/validationService';
+import { hasCertificate, loadECFConfig } from '../../utils/ecf/certificateService';
 
 // Componente principal para crear/editar facturas
 export default function InvoiceForm() {
@@ -175,22 +180,119 @@ export default function InvoiceForm() {
 
   // Validar formulario antes de guardar
   const validateForm = () => {
-    if (!formData.client.trim()) {
-      setError('El nombre del cliente es obligatorio.');
+    // Validar datos del cliente
+    if (!formData.client) {
+      setError('El nombre del cliente es obligatorio');
       return false;
     }
     
-    if (!formData.rnc.trim()) {
-      setError('El RNC/Cédula es obligatorio.');
+    // Validar RNC/Cédula
+    if (!formData.rnc) {
+      setError('El RNC/Cédula del cliente es obligatorio');
       return false;
     }
     
-    if (formData.items.some(item => !item.description.trim() || item.quantity <= 0 || item.price <= 0)) {
-      setError('Todos los productos/servicios deben tener descripción, cantidad y precio válidos.');
+    // Validar RNC/Cédula con el nuevo servicio de validación
+    if (!validateFiscalId(formData.rnc)) {
+      setError('El RNC/Cédula del cliente no es válido. Verifique el formato.');
       return false;
     }
+    
+    // Validar que haya al menos un item
+    if (formData.items.length === 0) {
+      setError('Debe agregar al menos un producto o servicio');
+      return false;
+    }
+    
+    // Validar que los items tengan descripción, cantidad y precio
+    for (let i = 0; i < formData.items.length; i++) {
+      const item = formData.items[i];
+      
+      if (!item.description) {
+        setError(`El item #${i + 1} debe tener una descripción`);
+        return false;
+      }
+      
+      if (!item.quantity || item.quantity <= 0) {
+        setError(`El item #${i + 1} debe tener una cantidad mayor a cero`);
+        return false;
+      }
+      
+      if (!item.price || item.price < 0) {
+        setError(`El item #${i + 1} debe tener un precio válido`);
+        return false;
+      }
+    }
+    
+    // Validar que los totales sean correctos
+    if (formData.subtotal <= 0) {
+      setError('El subtotal debe ser mayor a cero');
+      return false;
+    }
+    
+    // Validar que haya un certificado digital configurado
+    hasCertificate().then(exists => {
+      if (!exists) {
+        setError('No hay un certificado digital configurado. Configure uno en la sección de configuración de e-CF antes de crear facturas.');
+        return false;
+      }
+    }).catch(error => {
+      console.error('Error al verificar certificado:', error);
+    });
     
     return true;
+  };
+
+  // Manejar envío del formulario
+  const handleSubmit = async (e) => {
+    if (e) e.preventDefault();
+    
+    try {
+      // Validar formulario
+      if (!validateForm()) return;
+      
+      setLoading(true);
+      setError('');
+      
+      // Verificar si hay certificado digital configurado
+      const certificateExists = await hasCertificate();
+      
+      if (!certificateExists) {
+        setError('No hay un certificado digital configurado. Configure uno en la sección de configuración de e-CF antes de crear facturas.');
+        setLoading(false);
+        return;
+      }
+      
+      // Cargar configuración de e-CF
+      const ecfConfig = await loadECFConfig();
+      
+      // Guardar factura
+      const invoiceId = await saveInvoice('pendiente');
+      
+      if (!invoiceId) {
+        setError('Error al guardar la factura');
+        setLoading(false);
+        return;
+      }
+      
+      // Generar PDF
+      await generatePDF(invoiceId);
+      
+      // Si está configurado para envío automático o el usuario hizo clic en "Enviar a DGII"
+      if (ecfConfig.autoSendToDGII || e && e.nativeEvent && e.nativeEvent.submitter && e.nativeEvent.submitter.innerText === 'Enviar a DGII') {
+        await sendToDGII(invoiceId);
+      }
+      
+      // Redirigir a la página de detalles de la factura
+      setTimeout(() => {
+        navigate(`/facturas/${invoiceId}`);
+      }, 2000);
+    } catch (error) {
+      console.error('Error al procesar la factura:', error);
+      setError(`Error al procesar la factura: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Guardar factura en Firestore
@@ -212,11 +314,14 @@ export default function InvoiceForm() {
         updatedAt: serverTimestamp()
       };
       
+      // Crear factura electrónica
+      const ecfInvoice = await createInvoice(invoiceData);
+      
       if (isEditMode) {
-        await updateDoc(doc(db, 'invoices', invoiceId), invoiceData);
+        await updateDoc(doc(db, 'invoices', invoiceId), ecfInvoice);
         setSuccess('Factura actualizada correctamente.');
       } else {
-        await setDoc(doc(db, 'invoices', invoiceId), invoiceData);
+        await setDoc(doc(db, 'invoices', invoiceId), ecfInvoice);
         setSuccess('Factura guardada correctamente.');
       }
       
@@ -235,19 +340,18 @@ export default function InvoiceForm() {
     try {
       setLoading(true);
       
-      // Llamar a Cloud Function para generar PDF
-      const generateInvoicePDF = httpsCallable(functions, 'generateInvoicePDF');
-      const result = await generateInvoicePDF({ invoiceId });
+      // Generar PDF de la factura electrónica
+      const pdfUrl = await generateInvoicePDF(invoiceId);
       
-      if (result.data && result.data.pdfUrl) {
-        setPdfUrl(result.data.pdfUrl);
+      if (pdfUrl) {
+        setPdfUrl(pdfUrl);
         
         // Actualizar factura con URL del PDF
         await updateDoc(doc(db, 'invoices', invoiceId), {
-          pdfUrl: result.data.pdfUrl
+          pdfUrl
         });
         
-        return result.data.pdfUrl;
+        return pdfUrl;
       } else {
         throw new Error('No se pudo generar el PDF');
       }
@@ -265,21 +369,20 @@ export default function InvoiceForm() {
     try {
       setLoading(true);
       
-      // Llamar a Cloud Function para enviar a DGII
-      const sendInvoiceToDGII = httpsCallable(functions, 'sendInvoiceToDGII');
-      const result = await sendInvoiceToDGII({ invoiceId });
+      // Enviar factura electrónica a la DGII
+      const sent = await sendInvoiceToDGII(invoiceId);
       
-      if (result.data && result.data.success) {
+      if (sent) {
         // Actualizar estado de la factura
         await updateDoc(doc(db, 'invoices', invoiceId), {
           status: 'enviada',
-          dgiiResponse: result.data
+          dgiiResponse: sent
         });
         
         setSuccess('Factura enviada correctamente a la DGII.');
         return true;
       } else {
-        throw new Error(result.data?.error || 'Error al enviar a DGII');
+        throw new Error('Error al enviar a DGII');
       }
     } catch (error) {
       console.error('Error al enviar a DGII:', error);
@@ -294,40 +397,6 @@ export default function InvoiceForm() {
       return false;
     } finally {
       setLoading(false);
-    }
-  };
-
-  // Manejar envío del formulario
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    try {
-      // Paso 1: Guardar factura
-      const invoiceId = await saveInvoice('pendiente');
-      if (!invoiceId) return;
-      
-      // Paso 2: Generar PDF
-      const pdfUrl = await generatePDF(invoiceId);
-      if (!pdfUrl) {
-        setError('Se guardó la factura pero no se pudo generar el PDF.');
-        return;
-      }
-      
-      // Paso 3: Enviar a DGII si se solicita
-      if (activeStep === steps.length - 1) {
-        const sent = await sendToDGII(invoiceId);
-        if (sent) {
-          navigate(`/facturas/${invoiceId}`);
-        }
-      } else {
-        setSuccess('Factura guardada correctamente.');
-        if (!isEditMode) {
-          navigate(`/facturas/${invoiceId}`);
-        }
-      }
-    } catch (error) {
-      console.error('Error en el proceso de facturación:', error);
-      setError('Ocurrió un error en el proceso de facturación. Por favor, intenta nuevamente.');
     }
   };
 

@@ -19,7 +19,9 @@ import {
   InputAdornment,
   Switch,
   FormControlLabel,
-  Tooltip
+  Tooltip,
+  Tabs,
+  Tab
 } from '@mui/material';
 import {
   Save as SaveIcon,
@@ -27,13 +29,16 @@ import {
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
   Info as InfoIcon,
-  Security as SecurityIcon
+  Security as SecurityIcon,
+  Settings as SettingsIcon,
+  VpnKey as VpnKeyIcon
 } from '@mui/icons-material';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage, functions } from '../../firebase/firebase';
 import { httpsCallable } from 'firebase/functions';
 import CryptoJS from 'crypto-js';
+import CertificateManager from '../../components/ecf/CertificateManager';
 
 /**
  * Componente para la configuración de facturación electrónica (e-CF)
@@ -533,6 +538,10 @@ export default function ECFSettings() {
                   Guardar Configuración
                 </Button>
               </Box>
+            </Grid>
+            
+            <Grid item xs={12}>
+              <CertificateManager />
             </Grid>
           </Grid>
         </form>

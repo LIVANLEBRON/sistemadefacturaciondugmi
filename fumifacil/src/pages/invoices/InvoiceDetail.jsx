@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { 
-  Container, 
-  Paper, 
-  Typography, 
-  Box, 
+import {
+  Container,
+  Paper,
+  Typography,
+  Box,
   Button,
   Grid,
   Divider,
@@ -32,7 +32,7 @@ import {
   AccordionDetails,
   Snackbar
 } from '@mui/material';
-import { 
+import {
   ArrowBack as ArrowBackIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
@@ -46,7 +46,8 @@ import {
   Receipt as ReceiptIcon,
   Error as ErrorIcon,
   Warning as WarningIcon,
-  Info as InfoIcon
+  Info as InfoIcon,
+  VerifiedUser as VerifiedUserIcon
 } from '@mui/icons-material';
 import { doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
@@ -55,6 +56,9 @@ import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import QRCode from 'qrcode.react';
+import { sendInvoiceToDGII, checkInvoiceStatus, generateInvoicePDF, sendInvoiceByEmail } from '../../utils/ecf/invoiceService';
+import { formatFiscalId } from '../../utils/ecf/validationService';
+import ECFStatusChecker from '../../components/ecf/ECFStatusChecker';
 
 export default function InvoiceDetail() {
   const { id } = useParams();
@@ -99,6 +103,33 @@ export default function InvoiceDetail() {
       setError('Error al cargar la factura. Por favor, intenta nuevamente.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Manejar actualización de estado de e-CF
+  const handleECFStatusUpdate = async (statusData) => {
+    try {
+      // Actualizar datos de la factura
+      await updateDoc(doc(db, 'invoices', id), {
+        status: statusData.status === 'Aceptado' ? 'aceptada' : 
+                statusData.status === 'Rechazado' ? 'rechazada' : 'enviada',
+        dgiiStatusDetail: statusData.statusDetail || '',
+        dgiiLastCheck: new Date()
+      });
+      
+      // Actualizar datos locales
+      setInvoice(prev => ({
+        ...prev,
+        status: statusData.status === 'Aceptado' ? 'aceptada' : 
+                statusData.status === 'Rechazado' ? 'rechazada' : 'enviada',
+        dgiiStatusDetail: statusData.statusDetail || '',
+        dgiiLastCheck: new Date()
+      }));
+      
+      setSuccess('Estado de la factura actualizado correctamente');
+    } catch (error) {
+      console.error('Error al actualizar estado:', error);
+      setError('Error al actualizar estado de la factura');
     }
   };
 
@@ -206,8 +237,8 @@ export default function InvoiceDetail() {
       setActionLoading(true);
       
       // Llamar a Cloud Function para enviar correo
-      const sendInvoiceEmail = httpsCallable(functions, 'sendInvoiceEmail');
-      const result = await sendInvoiceEmail({ invoiceId: id });
+      const sendInvoiceByEmail = httpsCallable(functions, 'sendInvoiceByEmail');
+      const result = await sendInvoiceByEmail({ invoiceId: id });
       
       if (result.data && result.data.success) {
         // Actualizar estado de la factura
@@ -725,6 +756,8 @@ export default function InvoiceDetail() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <ECFStatusChecker invoice={invoice} onStatusUpdate={handleECFStatusUpdate} />
     </Container>
   );
 }
