@@ -12,14 +12,17 @@ import {
   List,
   ListItem,
   ListItemText,
-  CircularProgress
+  CircularProgress,
+  Button
 } from '@mui/material';
 import { 
   PeopleAlt as PeopleIcon,
   RequestQuote as QuoteIcon,
   Receipt as ReceiptIcon,
-  Inventory as InventoryIcon
+  Inventory as InventoryIcon,
+  ReceiptLong as ReceiptLongIcon
 } from '@mui/icons-material';
+import { Link } from 'react-router-dom';
 import { collection, query, orderBy, limit, getDocs, where, Timestamp } from 'firebase/firestore';
 import { db } from '../../firebase/firebase';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title } from 'chart.js';
@@ -353,6 +356,21 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </Grid>
+      </Grid>
+      <Grid item xs={12}>
+        <Box sx={{ mt: 4, display: 'flex', justifyContent: 'center' }}>
+          <Button 
+            variant="contained" 
+            color="primary" 
+            component={Link} 
+            to="/dashboard/ecf"
+            startIcon={<ReceiptLongIcon />}
+            size="large"
+            sx={{ px: 3, py: 1 }}
+          >
+            Ver Dashboard de Facturación Electrónica
+          </Button>
+        </Box>
       </Grid>
     </Container>
   );

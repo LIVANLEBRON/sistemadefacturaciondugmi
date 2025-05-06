@@ -58,7 +58,7 @@ import { es } from 'date-fns/locale';
 import QRCode from 'qrcode.react';
 import { sendInvoiceToDGII, checkInvoiceStatus, generateInvoicePDF, sendInvoiceByEmail } from '../../utils/ecf/invoiceService';
 import { formatFiscalId } from '../../utils/ecf/validationService';
-import ECFStatusChecker from '../../components/ecf/ECFStatusChecker';
+import ECFStatusDetail from '../../components/ecf/ECFStatusDetail';
 
 export default function InvoiceDetail() {
   const { id } = useParams();
@@ -130,6 +130,37 @@ export default function InvoiceDetail() {
     } catch (error) {
       console.error('Error al actualizar estado:', error);
       setError('Error al actualizar estado de la factura');
+    }
+  };
+
+  // Manejar envío a la DGII
+  const handleSendToDGII = async (result) => {
+    try {
+      if (result && result.success) {
+        // Actualizar datos de la factura
+        await updateDoc(doc(db, 'invoices', id), {
+          status: 'enviada',
+          trackId: result.trackId || '',
+          dgiiSubmissionDate: new Date(),
+          dgiiResponse: result
+        });
+        
+        // Actualizar datos locales
+        setInvoice(prev => ({
+          ...prev,
+          status: 'enviada',
+          trackId: result.trackId || '',
+          dgiiSubmissionDate: new Date(),
+          dgiiResponse: result
+        }));
+        
+        setSuccess('Factura enviada correctamente a la DGII');
+      } else {
+        throw new Error(result?.message || 'Error al enviar la factura a la DGII');
+      }
+    } catch (error) {
+      console.error('Error al enviar a DGII:', error);
+      setError('Error al enviar la factura a la DGII');
     }
   };
 
@@ -757,7 +788,7 @@ export default function InvoiceDetail() {
         </DialogActions>
       </Dialog>
 
-      <ECFStatusChecker invoice={invoice} onStatusUpdate={handleECFStatusUpdate} />
+      <ECFStatusDetail invoice={invoice} onStatusUpdate={handleECFStatusUpdate} onSendToDGII={handleSendToDGII} />
     </Container>
   );
 }

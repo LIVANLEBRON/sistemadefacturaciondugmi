@@ -17,7 +17,8 @@ import {
   Avatar,
   Menu,
   MenuItem,
-  Tooltip
+  Tooltip,
+  Collapse
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -27,7 +28,10 @@ import {
   Description as DescriptionIcon,
   Settings as SettingsIcon,
   Logout as LogoutIcon,
-  AccountCircle
+  AccountCircle,
+  ExpandLess,
+  ExpandMore,
+  ReceiptLong as ReceiptLongIcon
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -36,6 +40,7 @@ const drawerWidth = 240;
 export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState(null);
+  const [openSubMenu, setOpenSubMenu] = useState(false);
   const { currentUser, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -52,6 +57,10 @@ export default function Layout() {
     setAnchorEl(null);
   };
 
+  const handleSubMenuToggle = () => {
+    setOpenSubMenu(!openSubMenu);
+  };
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -64,7 +73,16 @@ export default function Layout() {
   const menuItems = [
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Facturación', icon: <ReceiptIcon />, path: '/facturas' },
-    { text: 'Inventario', icon: <InventoryIcon />, path: '/inventario' },
+    { 
+      text: 'Facturación Electrónica', 
+      icon: <ReceiptLongIcon />, 
+      hasSubMenu: true,
+      subMenuItems: [
+        { text: 'Dashboard e-CF', path: '/dashboard/ecf' },
+        { text: 'Configuración e-CF', path: '/configuracion/ecf' }
+      ]
+    },
+    { text: 'Inventario', icon: <InventoryIcon />, path: '/productos' },
     { text: 'Cotizaciones', icon: <DescriptionIcon />, path: '/cotizaciones' },
     { text: 'Configuración', icon: <SettingsIcon />, path: '/configuracion' }
   ];
@@ -79,20 +97,52 @@ export default function Layout() {
       <Divider />
       <List>
         {menuItems.map((item) => (
-          <ListItem key={item.text} disablePadding>
-            <ListItemButton 
-              selected={location.pathname === item.path}
-              onClick={() => {
-                navigate(item.path);
-                setMobileOpen(false);
-              }}
-            >
-              <ListItemIcon>
-                {item.icon}
-              </ListItemIcon>
-              <ListItemText primary={item.text} />
-            </ListItemButton>
-          </ListItem>
+          <div key={item.text}>
+            <ListItem disablePadding>
+              {item.hasSubMenu ? (
+                <ListItemButton onClick={handleSubMenuToggle}>
+                  <ListItemIcon>
+                    {item.icon}
+                  </ListItemIcon>
+                  <ListItemText primary={item.text} />
+                  {openSubMenu ? <ExpandLess /> : <ExpandMore />}
+                </ListItemButton>
+              ) : (
+                <ListItemButton 
+                  selected={location.pathname === item.path}
+                  onClick={() => {
+                    navigate(item.path);
+                    setMobileOpen(false);
+                  }}
+                >
+                  <ListItemIcon>
+                    {item.icon}
+                  </ListItemIcon>
+                  <ListItemText primary={item.text} />
+                </ListItemButton>
+              )}
+            </ListItem>
+            
+            {item.hasSubMenu && (
+              <Collapse in={openSubMenu} timeout="auto" unmountOnExit>
+                <List component="div" disablePadding>
+                  {item.subMenuItems.map((subItem) => (
+                    <ListItemButton 
+                      key={subItem.text}
+                      sx={{ pl: 4 }}
+                      selected={location.pathname === subItem.path}
+                      onClick={() => {
+                        navigate(subItem.path);
+                        setMobileOpen(false);
+                      }}
+                    >
+                      <ListItemText primary={subItem.text} />
+                    </ListItemButton>
+                  ))}
+                </List>
+              </Collapse>
+            )}
+          </div>
         ))}
       </List>
     </div>

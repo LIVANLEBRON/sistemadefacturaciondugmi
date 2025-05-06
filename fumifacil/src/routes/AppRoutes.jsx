@@ -4,6 +4,7 @@ import ClientForm from '../pages/clients/ClientForm';
 import ClientFormOffline from '../pages/clients/ClientFormOffline';
 import ClientDetail from '../pages/clients/ClientDetail';
 import Dashboard from '../pages/dashboard/Dashboard';
+import ECFDashboard from '../pages/dashboard/ECFDashboard';
 import Login from '../pages/auth/Login';
 import Register from '../pages/auth/Register';
 import ForgotPassword from '../pages/auth/ForgotPassword';
@@ -48,6 +49,7 @@ export default function AppRoutes() {
       <Route element={<PrivateRoute />}>
         {/* Ruta principal */}
         <Route path="/" element={<Dashboard />} />
+        <Route path="/dashboard/ecf" element={<ECFDashboard />} />
         
         {/* Rutas de clientes */}
         <Route path="/clientes" element={<ClientList />} />
