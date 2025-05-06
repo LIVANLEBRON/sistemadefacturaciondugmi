@@ -15,6 +15,12 @@ import QuoteList from '../pages/quotes/QuoteList';
 import QuoteForm from '../pages/quotes/QuoteForm';
 import QuoteDetail from '../pages/quotes/QuoteDetail';
 
+// Importar componentes de facturas
+import InvoiceList from '../pages/invoices/InvoiceList';
+import InvoiceForm from '../pages/invoices/InvoiceForm';
+import InvoiceDetail from '../pages/invoices/InvoiceDetail';
+import ECFSettings from '../pages/settings/ECFSettings';
+
 // Importar componentes de inventario
 import InventoryList from '../pages/inventory/InventoryList';
 import ProductForm from '../pages/inventory/ProductForm';
@@ -57,9 +63,11 @@ export default function AppRoutes() {
         <Route path="/cotizaciones/editar/:id" element={<QuoteForm />} />
         <Route path="/cotizaciones/:id" element={<QuoteDetail />} />
         
-        {/* Rutas de facturas - placeholder hasta que se implementen */}
-        <Route path="/facturas" element={<NotImplemented feature="Facturas" />} />
-        <Route path="/facturas/nueva" element={<NotImplemented feature="Nueva Factura" />} />
+        {/* Rutas de facturas */}
+        <Route path="/facturas" element={<InvoiceList />} />
+        <Route path="/facturas/nueva" element={<InvoiceForm />} />
+        <Route path="/facturas/editar/:id" element={<InvoiceForm />} />
+        <Route path="/facturas/:id" element={<InvoiceDetail />} />
         
         {/* Rutas de inventario */}
         <Route path="/inventario" element={<InventoryList />} />
@@ -71,6 +79,7 @@ export default function AppRoutes() {
         
         {/* Rutas de configuración */}
         <Route path="/configuracion" element={<Settings />} />
+        <Route path="/configuracion/ecf" element={<ECFSettings />} />
       </Route>
       
       {/* Ruta para redireccionar URLs no encontradas */}

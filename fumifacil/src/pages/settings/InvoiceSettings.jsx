@@ -15,13 +15,22 @@ import {
   Select,
   MenuItem,
   Switch,
-  FormControlLabel
+  FormControlLabel,
+  Card,
+  CardContent,
+  CardActions
 } from '@mui/material';
-import { Save as SaveIcon } from '@mui/icons-material';
+import { 
+  Save as SaveIcon, 
+  Security as SecurityIcon,
+  ArrowForward as ArrowForwardIcon
+} from '@mui/icons-material';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../../firebase/firebase';
+import { useNavigate } from 'react-router-dom';
 
 export default function InvoiceSettings() {
+  const navigate = useNavigate();
   const [settings, setSettings] = useState({
     nextInvoiceNumber: 1,
     invoicePrefix: 'ECF',
@@ -114,7 +123,7 @@ export default function InvoiceSettings() {
   return (
     <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
       <Typography variant="h4" component="h1" gutterBottom>
-        Configuración de Facturación Electrónica
+        Configuración de Facturación
       </Typography>
       
       {error && (
@@ -128,6 +137,40 @@ export default function InvoiceSettings() {
           {success}
         </Alert>
       )}
+      
+      <Card sx={{ mb: 4 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+            <SecurityIcon sx={{ fontSize: 40, mr: 2, color: 'primary.main' }} />
+            <Box>
+              <Typography variant="h5" gutterBottom sx={{ mb: 0 }}>
+                Configuración de e-CF (Facturación Electrónica)
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Configure los parámetros para la facturación electrónica según la Ley 32-23 de la DGII
+              </Typography>
+            </Box>
+          </Box>
+          <Typography variant="body1" paragraph>
+            En esta sección puede configurar los parámetros necesarios para la facturación electrónica, incluyendo:
+          </Typography>
+          <ul>
+            <li>Certificado digital para firma electrónica</li>
+            <li>Credenciales de acceso a la API de la DGII</li>
+            <li>Configuración de seguridad para la encriptación de certificados</li>
+            <li>Modo de prueba o producción</li>
+          </ul>
+        </CardContent>
+        <CardActions sx={{ justifyContent: 'flex-end' }}>
+          <Button 
+            variant="contained" 
+            endIcon={<ArrowForwardIcon />}
+            onClick={() => navigate('/configuracion/ecf')}
+          >
+            Configurar e-CF
+          </Button>
+        </CardActions>
+      </Card>
       
       <Paper sx={{ p: 3 }}>
         <form onSubmit={handleSubmit}>
@@ -144,7 +187,7 @@ export default function InvoiceSettings() {
                 value={settings.invoicePrefix}
                 onChange={handleChange}
                 margin="normal"
-                helperText="Prefijo que se añadirá a los números de factura"
+                required
               />
             </Grid>
             
@@ -158,19 +201,19 @@ export default function InvoiceSettings() {
                 onChange={handleChange}
                 margin="normal"
                 required
-                helperText="Número que se asignará a la próxima factura"
+                inputProps={{ min: 1 }}
               />
             </Grid>
             
             <Grid item xs={12} sm={6}>
               <FormControl fullWidth margin="normal">
-                <InputLabel id="invoice-sequence-label">Secuencia de Facturación</InputLabel>
+                <InputLabel id="sequence-type-label">Tipo de Secuencia</InputLabel>
                 <Select
-                  labelId="invoice-sequence-label"
+                  labelId="sequence-type-label"
                   name="invoiceSequenceType"
                   value={settings.invoiceSequenceType}
                   onChange={handleChange}
-                  label="Secuencia de Facturación"
+                  label="Tipo de Secuencia"
                 >
                   <MenuItem value="automatic">Automática</MenuItem>
                   <MenuItem value="manual">Manual</MenuItem>

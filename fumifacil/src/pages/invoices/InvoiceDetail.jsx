@@ -18,7 +18,19 @@ import {
   DialogActions,
   DialogContent,
   DialogContentText,
-  DialogTitle
+  DialogTitle,
+  Stepper,
+  Step,
+  StepLabel,
+  Tooltip,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemIcon,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Snackbar
 } from '@mui/material';
 import { 
   ArrowBack as ArrowBackIcon,
@@ -27,7 +39,14 @@ import {
   FileDownload as FileDownloadIcon,
   Send as SendIcon,
   Print as PrintIcon,
-  Email as EmailIcon
+  Email as EmailIcon,
+  CheckCircle as CheckCircleIcon,
+  ExpandMore as ExpandMoreIcon,
+  History as HistoryIcon,
+  Receipt as ReceiptIcon,
+  Error as ErrorIcon,
+  Warning as WarningIcon,
+  Info as InfoIcon
 } from '@mui/icons-material';
 import { doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
@@ -43,66 +62,90 @@ export default function InvoiceDetail() {
   
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [resendDialogOpen, setResendDialogOpen] = useState(false);
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   
   // Cargar datos de la factura
   useEffect(() => {
-    const fetchInvoice = async () => {
-      try {
-        setLoading(true);
-        setError('');
-        
-        const invoiceDoc = await getDoc(doc(db, 'invoices', id));
-        
-        if (invoiceDoc.exists()) {
-          const invoiceData = invoiceDoc.data();
-          setInvoice({
-            id: invoiceDoc.id,
-            ...invoiceData,
-            date: invoiceData.date ? invoiceData.date.toDate() : new Date()
-          });
-        } else {
-          setError('No se encontró la factura solicitada.');
-          navigate('/facturas');
-        }
-      } catch (error) {
-        console.error('Error al cargar la factura:', error);
-        setError('Error al cargar la factura. Por favor, intenta nuevamente.');
-      } finally {
-        setLoading(false);
-      }
-    };
-    
     fetchInvoice();
   }, [id, navigate]);
-
-  // Función para descargar PDF
-  const handleDownloadPDF = async () => {
+  
+  const fetchInvoice = async () => {
     try {
       setLoading(true);
+      setError('');
+      
+      const invoiceDoc = await getDoc(doc(db, 'invoices', id));
+      
+      if (invoiceDoc.exists()) {
+        const invoiceData = invoiceDoc.data();
+        setInvoice({
+          id: invoiceDoc.id,
+          ...invoiceData,
+          date: invoiceData.date ? invoiceData.date.toDate() : new Date(),
+          dgiiSubmissionDate: invoiceData.dgiiSubmissionDate ? invoiceData.dgiiSubmissionDate.toDate() : null,
+          dgiiLastCheck: invoiceData.dgiiLastCheck ? invoiceData.dgiiLastCheck.toDate() : null
+        });
+      } else {
+        setError('No se encontró la factura solicitada.');
+        navigate('/facturas');
+      }
+    } catch (error) {
+      console.error('Error al cargar la factura:', error);
+      setError('Error al cargar la factura. Por favor, intenta nuevamente.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Función para generar y descargar PDF
+  const handleDownloadPDF = async () => {
+    try {
+      setActionLoading(true);
       
       if (invoice.pdfUrl) {
         window.open(invoice.pdfUrl, '_blank');
       } else {
-        const pdfRef = ref(storage, `invoices/${id}.pdf`);
-        const url = await getDownloadURL(pdfRef);
-        window.open(url, '_blank');
+        // Generar PDF usando Cloud Function
+        const generateInvoicePDF = httpsCallable(functions, 'generateInvoicePDF');
+        const result = await generateInvoicePDF({ invoiceId: id });
+        
+        if (result.data && result.data.pdfUrl) {
+          // Actualizar la factura con la URL del PDF
+          await updateDoc(doc(db, 'invoices', id), {
+            pdfUrl: result.data.pdfUrl
+          });
+          
+          // Actualizar datos locales
+          setInvoice(prev => ({
+            ...prev,
+            pdfUrl: result.data.pdfUrl
+          }));
+          
+          // Abrir el PDF
+          window.open(result.data.pdfUrl, '_blank');
+          
+          setSuccess('PDF generado correctamente');
+        } else {
+          throw new Error('No se pudo generar el PDF');
+        }
       }
     } catch (error) {
       console.error('Error al descargar el PDF:', error);
       setError('Error al descargar el PDF. Por favor, intenta nuevamente.');
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
   // Función para eliminar factura
   const handleDelete = async () => {
     try {
-      setLoading(true);
+      setActionLoading(true);
       await deleteDoc(doc(db, 'invoices', id));
       setSuccess('Factura eliminada correctamente.');
       setTimeout(() => {
@@ -112,7 +155,7 @@ export default function InvoiceDetail() {
       console.error('Error al eliminar la factura:', error);
       setError('Error al eliminar la factura. Por favor, intenta nuevamente.');
     } finally {
-      setLoading(false);
+      setActionLoading(false);
       setDeleteDialogOpen(false);
     }
   };
@@ -120,7 +163,7 @@ export default function InvoiceDetail() {
   // Función para reenviar factura a la DGII
   const handleResend = async () => {
     try {
-      setLoading(true);
+      setActionLoading(true);
       
       // Llamar a Cloud Function para enviar a DGII
       const sendInvoiceToDGII = httpsCallable(functions, 'sendInvoiceToDGII');
@@ -130,6 +173,8 @@ export default function InvoiceDetail() {
         // Actualizar estado de la factura
         await updateDoc(doc(db, 'invoices', id), {
           status: 'enviada',
+          trackId: result.data.trackId,
+          dgiiSubmissionDate: new Date(),
           dgiiResponse: result.data
         });
         
@@ -137,18 +182,20 @@ export default function InvoiceDetail() {
         setInvoice(prev => ({
           ...prev,
           status: 'enviada',
+          trackId: result.data.trackId,
+          dgiiSubmissionDate: new Date(),
           dgiiResponse: result.data
         }));
         
-        setSuccess('Factura enviada correctamente a la DGII.');
+        setSuccess(`Factura enviada a la DGII correctamente. TrackID: ${result.data.trackId}`);
       } else {
-        throw new Error(result.data?.error || 'Error al enviar a DGII');
+        throw new Error(result.data.error || 'No se pudo enviar a la DGII');
       }
     } catch (error) {
-      console.error('Error al enviar a DGII:', error);
-      setError('Error al enviar a DGII. La factura se mantendrá como pendiente para reintento automático.');
+      console.error('Error al enviar a la DGII:', error);
+      setError(`Error al enviar a la DGII: ${error.message}`);
     } finally {
-      setLoading(false);
+      setActionLoading(false);
       setResendDialogOpen(false);
     }
   };
@@ -156,57 +203,154 @@ export default function InvoiceDetail() {
   // Función para enviar factura por correo
   const handleSendEmail = async () => {
     try {
-      setLoading(true);
+      setActionLoading(true);
       
-      // Llamar a Cloud Function para enviar por correo
-      const sendInvoiceByEmail = httpsCallable(functions, 'sendInvoiceByEmail');
-      const result = await sendInvoiceByEmail({ 
-        invoiceId: id,
-        email: invoice.email
-      });
+      // Llamar a Cloud Function para enviar correo
+      const sendInvoiceEmail = httpsCallable(functions, 'sendInvoiceEmail');
+      const result = await sendInvoiceEmail({ invoiceId: id });
       
       if (result.data && result.data.success) {
+        // Actualizar estado de la factura
+        await updateDoc(doc(db, 'invoices', id), {
+          emailSent: true,
+          emailSentDate: new Date()
+        });
+        
+        // Actualizar datos locales
+        setInvoice(prev => ({
+          ...prev,
+          emailSent: true,
+          emailSentDate: new Date()
+        }));
+        
         setSuccess('Factura enviada por correo correctamente.');
       } else {
-        throw new Error(result.data?.error || 'Error al enviar por correo');
+        throw new Error(result.data.error || 'No se pudo enviar el correo');
       }
     } catch (error) {
-      console.error('Error al enviar por correo:', error);
-      setError('Error al enviar la factura por correo. Por favor, intenta nuevamente.');
+      console.error('Error al enviar el correo:', error);
+      setError(`Error al enviar el correo: ${error.message}`);
     } finally {
-      setLoading(false);
+      setActionLoading(false);
+      setEmailDialogOpen(false);
+    }
+  };
+
+  // Función para verificar el estado de la factura en la DGII
+  const handleCheckStatus = async () => {
+    if (!invoice.trackId) {
+      setError('Esta factura no tiene un TrackID asignado. Debe enviarla primero a la DGII.');
+      return;
+    }
+    
+    try {
+      setActionLoading(true);
+      
+      // Llamar a Cloud Function para verificar estado
+      const checkInvoiceStatus = httpsCallable(functions, 'checkInvoiceStatus');
+      const result = await checkInvoiceStatus({ invoiceId: id, trackId: invoice.trackId });
+      
+      if (result.data && result.data.status) {
+        // Determinar el nuevo estado
+        const newStatus = result.data.status === 'Aceptado' ? 'aceptada' : 
+                         result.data.status === 'Rechazado' ? 'rechazada' : 'enviada';
+        
+        // Actualizar estado de la factura
+        await updateDoc(doc(db, 'invoices', id), {
+          status: newStatus,
+          dgiiStatusDetail: result.data.statusDetail || '',
+          dgiiLastCheck: new Date()
+        });
+        
+        // Actualizar datos locales
+        setInvoice(prev => ({
+          ...prev,
+          status: newStatus,
+          dgiiStatusDetail: result.data.statusDetail || '',
+          dgiiLastCheck: new Date()
+        }));
+        
+        setSuccess(`Estado de la factura: ${result.data.status}`);
+      } else {
+        throw new Error(result.data.error || 'No se pudo verificar el estado');
+      }
+    } catch (error) {
+      console.error('Error al verificar el estado:', error);
+      setError(`Error al verificar el estado: ${error.message}`);
+    } finally {
+      setActionLoading(false);
     }
   };
 
   // Renderizar estado de la factura
   const renderStatus = (status) => {
-    let color;
-    let label;
+    let label = 'Desconocido';
+    let color = 'default';
+    let icon = <InfoIcon />;
     
     switch (status) {
-      case 'enviada':
-        color = 'success';
-        label = 'Enviada';
-        break;
       case 'pendiente':
-        color = 'warning';
         label = 'Pendiente';
+        color = 'warning';
+        icon = <WarningIcon />;
         break;
-      case 'anulada':
+      case 'enviada':
+        label = 'Enviada a DGII';
+        color = 'info';
+        icon = <SendIcon />;
+        break;
+      case 'aceptada':
+        label = 'Aceptada por DGII';
+        color = 'success';
+        icon = <CheckCircleIcon />;
+        break;
+      case 'rechazada':
+        label = 'Rechazada por DGII';
         color = 'error';
-        label = 'Anulada';
+        icon = <ErrorIcon />;
         break;
       default:
-        color = 'default';
-        label = status;
+        break;
     }
     
-    return <Chip label={label} color={color} />;
+    return (
+      <Chip 
+        icon={icon}
+        label={label} 
+        color={color} 
+        sx={{ fontWeight: 'bold', fontSize: '1rem', py: 2, px: 1 }} 
+      />
+    );
   };
 
-  if (loading && !invoice) {
+  // Renderizar pasos del proceso de facturación electrónica
+  const renderECFSteps = () => {
+    const steps = [
+      { label: 'Creada', completed: true },
+      { label: 'Enviada a DGII', completed: invoice.status !== 'pendiente' },
+      { label: 'Procesada por DGII', completed: invoice.status === 'aceptada' || invoice.status === 'rechazada' },
+      { label: 'Aceptada', completed: invoice.status === 'aceptada' }
+    ];
+    
     return (
-      <Container maxWidth="lg" sx={{ mt: 4, mb: 4, display: 'flex', justifyContent: 'center' }}>
+      <Stepper activeStep={
+        invoice.status === 'pendiente' ? 0 :
+        invoice.status === 'enviada' ? 1 :
+        invoice.status === 'rechazada' ? 2 :
+        invoice.status === 'aceptada' ? 3 : 0
+      } alternativeLabel sx={{ mb: 3 }}>
+        {steps.map((step, index) => (
+          <Step key={step.label} completed={step.completed}>
+            <StepLabel>{step.label}</StepLabel>
+          </Step>
+        ))}
+      </Stepper>
+    );
+  };
+
+  if (loading) {
+    return (
+      <Container maxWidth="lg" sx={{ mt: 4, mb: 4, display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
         <CircularProgress />
       </Container>
     );
@@ -216,14 +360,14 @@ export default function InvoiceDetail() {
     return (
       <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
         <Alert severity="error">
-          {error || 'No se pudo cargar la factura.'}
+          No se pudo cargar la factura. Por favor, intenta nuevamente.
         </Alert>
         <Button
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate('/facturas')}
           sx={{ mt: 2 }}
         >
-          Volver a Facturas
+          Volver a la lista
         </Button>
       </Container>
     );
@@ -236,8 +380,26 @@ export default function InvoiceDetail() {
           <ArrowBackIcon />
         </IconButton>
         <Typography variant="h4" component="h1">
-          Factura #{invoice.trackId}
+          Factura #{invoice.id.substring(invoice.id.length - 6).toUpperCase()}
         </Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={<EditIcon />}
+            onClick={() => navigate(`/facturas/editar/${id}`)}
+          >
+            Editar
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<DeleteIcon />}
+            color="error"
+            onClick={() => setDeleteDialogOpen(true)}
+          >
+            Eliminar
+          </Button>
+        </Box>
       </Box>
 
       {error && (
@@ -247,70 +409,52 @@ export default function InvoiceDetail() {
       )}
 
       {success && (
-        <Alert severity="success" sx={{ mb: 2 }}>
-          {success}
-        </Alert>
+        <Snackbar
+          open={Boolean(success)}
+          autoHideDuration={6000}
+          onClose={() => setSuccess('')}
+          message={success}
+        />
       )}
 
       <Paper sx={{ p: 3, mb: 4 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <Typography variant="h6" sx={{ mr: 2 }}>
-              Estado:
-            </Typography>
+          <Typography variant="h5" gutterBottom>
+            Estado de la Factura
+          </Typography>
+          <Box>
             {renderStatus(invoice.status)}
           </Box>
-          <Box>
-            <Button
-              startIcon={<EditIcon />}
-              onClick={() => navigate(`/facturas/editar/${id}`)}
-              sx={{ mr: 1 }}
-            >
-              Editar
-            </Button>
-            <Button
-              startIcon={<FileDownloadIcon />}
-              onClick={handleDownloadPDF}
-              sx={{ mr: 1 }}
-            >
-              Descargar PDF
-            </Button>
-            <Button
-              startIcon={<PrintIcon />}
-              onClick={() => window.print()}
-              sx={{ mr: 1 }}
-            >
-              Imprimir
-            </Button>
-            {invoice.email && (
-              <Button
-                startIcon={<EmailIcon />}
-                onClick={handleSendEmail}
-                sx={{ mr: 1 }}
-              >
-                Enviar por Correo
-              </Button>
-            )}
-            {invoice.status === 'pendiente' && (
-              <Button
-                variant="contained"
-                color="primary"
-                startIcon={<SendIcon />}
-                onClick={() => setResendDialogOpen(true)}
-                sx={{ mr: 1 }}
-              >
-                Enviar a DGII
-              </Button>
-            )}
-            <Button
-              variant="outlined"
-              color="error"
-              startIcon={<DeleteIcon />}
-              onClick={() => setDeleteDialogOpen(true)}
-            >
-              Eliminar
-            </Button>
-          </Box>
+        </Box>
+
+        {renderECFSteps()}
+
+        <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mb: 3 }}>
+          <Button
+            variant="contained"
+            startIcon={<FileDownloadIcon />}
+            onClick={handleDownloadPDF}
+            disabled={actionLoading}
+          >
+            {actionLoading ? <CircularProgress size={24} /> : 'Descargar PDF'}
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<Email />}
+            onClick={() => setEmailDialogOpen(true)}
+            disabled={actionLoading}
+          >
+            Enviar por Correo
+          </Button>
+          <Button
+            variant="contained"
+            color={invoice.status === 'pendiente' ? 'primary' : 'info'}
+            startIcon={invoice.status === 'pendiente' ? <SendIcon /> : <CheckCircleIcon />}
+            onClick={invoice.status === 'pendiente' ? () => setResendDialogOpen(true) : handleCheckStatus}
+            disabled={actionLoading}
+          >
+            {invoice.status === 'pendiente' ? 'Enviar a DGII' : 'Verificar Estado DGII'}
+          </Button>
         </Box>
 
         <Grid container spacing={3}>
@@ -320,39 +464,21 @@ export default function InvoiceDetail() {
                 <Typography variant="h6" gutterBottom>
                   Datos del Cliente
                 </Typography>
-                <Grid container spacing={2}>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="body1">
-                      <strong>Cliente:</strong> {invoice.client}
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="body1">
-                      <strong>RNC/Cédula:</strong> {invoice.rnc}
-                    </Typography>
-                  </Grid>
-                  {invoice.address && (
-                    <Grid item xs={12}>
-                      <Typography variant="body1">
-                        <strong>Dirección:</strong> {invoice.address}
-                      </Typography>
-                    </Grid>
-                  )}
-                  {invoice.email && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body1">
-                        <strong>Correo:</strong> {invoice.email}
-                      </Typography>
-                    </Grid>
-                  )}
-                  {invoice.phone && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body1">
-                        <strong>Teléfono:</strong> {invoice.phone}
-                      </Typography>
-                    </Grid>
-                  )}
-                </Grid>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  <strong>Cliente:</strong> {invoice.client}
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  <strong>RNC/Cédula:</strong> {invoice.rnc}
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  <strong>Dirección:</strong> {invoice.address}
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  <strong>Email:</strong> {invoice.email}
+                </Typography>
+                <Typography variant="body1">
+                  <strong>Teléfono:</strong> {invoice.phone}
+                </Typography>
               </CardContent>
             </Card>
 
@@ -364,27 +490,33 @@ export default function InvoiceDetail() {
                 <Box sx={{ mb: 2 }}>
                   {invoice.items.map((item, index) => (
                     <Box key={index} sx={{ mb: 2 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                        <Typography variant="body1">
-                          {item.description}
-                        </Typography>
-                        <Typography variant="body1">
-                          {item.quantity} x RD$ {item.price.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                        </Typography>
-                      </Box>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                        <Typography variant="body2" color="text.secondary">
-                          ITBIS ({item.tax}%)
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          RD$ {(item.quantity * item.price * (item.tax / 100)).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                        </Typography>
-                      </Box>
+                      <Grid container spacing={2}>
+                        <Grid item xs={6}>
+                          <Typography variant="body1">
+                            {item.description}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={2}>
+                          <Typography variant="body1" align="right">
+                            {item.quantity}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={2}>
+                          <Typography variant="body1" align="right">
+                            RD$ {item.price.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={2}>
+                          <Typography variant="body1" align="right">
+                            RD$ {(item.quantity * item.price).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                          </Typography>
+                        </Grid>
+                      </Grid>
                       {index < invoice.items.length - 1 && <Divider sx={{ my: 1 }} />}
                     </Box>
                   ))}
                 </Box>
-                <Divider sx={{ my: 2 }} />
+                <Divider sx={{ my: 1 }} />
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="body1">
                     Subtotal
@@ -424,7 +556,7 @@ export default function InvoiceDetail() {
                   <strong>Fecha:</strong> {format(invoice.date, 'dd/MM/yyyy', { locale: es })}
                 </Typography>
                 <Typography variant="body1" sx={{ mb: 1 }}>
-                  <strong>TrackID:</strong> {invoice.trackId}
+                  <strong>TrackID DGII:</strong> {invoice.trackId || 'No disponible'}
                 </Typography>
                 <Typography variant="body1" sx={{ mb: 1 }}>
                   <strong>Método de Pago:</strong> {
@@ -433,7 +565,7 @@ export default function InvoiceDetail() {
                       'tarjeta': 'Tarjeta de Crédito/Débito',
                       'transferencia': 'Transferencia Bancaria',
                       'cheque': 'Cheque'
-                    }[invoice.paymentMethod]
+                    }[invoice.paymentMethod] || invoice.paymentMethod
                   }
                 </Typography>
                 {invoice.notes && (
@@ -444,24 +576,95 @@ export default function InvoiceDetail() {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardContent sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <Typography variant="h6" gutterBottom>
-                  Código QR
-                </Typography>
-                <Box sx={{ mb: 2 }}>
-                  <QRCode 
-                    value={`https://dgii.gov.do/ecf?id=${invoice.trackId}`} 
-                    size={200}
-                    level="H"
-                    includeMargin={true}
-                  />
+            {invoice.trackId && (
+              <Card sx={{ mb: 3 }}>
+                <CardContent sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <Typography variant="h6" gutterBottom>
+                    Código QR
+                  </Typography>
+                  <Box sx={{ mb: 2 }}>
+                    <QRCode 
+                      value={`https://dgii.gov.do/ecf?id=${invoice.trackId}`} 
+                      size={200}
+                      level="H"
+                      includeMargin={true}
+                    />
+                  </Box>
+                  <Typography variant="body2" color="text.secondary" align="center">
+                    Escanea este código para verificar la autenticidad de la factura en el portal de la DGII
+                  </Typography>
+                </CardContent>
+              </Card>
+            )}
+
+            <Accordion>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <HistoryIcon sx={{ mr: 1 }} />
+                  <Typography variant="h6">Historial de la Factura</Typography>
                 </Box>
-                <Typography variant="body2" color="text.secondary" align="center">
-                  Escanea este código para verificar la autenticidad de la factura en el portal de la DGII
-                </Typography>
-              </CardContent>
-            </Card>
+              </AccordionSummary>
+              <AccordionDetails>
+                <List dense>
+                  <ListItem>
+                    <ListItemIcon>
+                      <ReceiptIcon />
+                    </ListItemIcon>
+                    <ListItemText 
+                      primary="Creación de Factura" 
+                      secondary={format(invoice.date, 'dd/MM/yyyy HH:mm', { locale: es })} 
+                    />
+                  </ListItem>
+                  
+                  {invoice.dgiiSubmissionDate && (
+                    <ListItem>
+                      <ListItemIcon>
+                        <SendIcon />
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary="Enviada a DGII" 
+                        secondary={format(invoice.dgiiSubmissionDate, 'dd/MM/yyyy HH:mm', { locale: es })} 
+                      />
+                    </ListItem>
+                  )}
+                  
+                  {invoice.dgiiLastCheck && (
+                    <ListItem>
+                      <ListItemIcon>
+                        <CheckCircleIcon />
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary="Última verificación" 
+                        secondary={format(invoice.dgiiLastCheck, 'dd/MM/yyyy HH:mm', { locale: es })} 
+                      />
+                    </ListItem>
+                  )}
+                  
+                  {invoice.emailSentDate && (
+                    <ListItem>
+                      <ListItemIcon>
+                        <EmailIcon />
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary="Enviada por correo" 
+                        secondary={format(invoice.emailSentDate, 'dd/MM/yyyy HH:mm', { locale: es })} 
+                      />
+                    </ListItem>
+                  )}
+                </List>
+                
+                {invoice.dgiiStatusDetail && (
+                  <Box sx={{ mt: 2 }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Detalles del estado DGII:
+                    </Typography>
+                    <Alert severity={invoice.status === 'aceptada' ? 'success' : invoice.status === 'rechazada' ? 'error' : 'info'}>
+                      {invoice.dgiiStatusDetail}
+                    </Alert>
+                  </Box>
+                )}
+              </AccordionDetails>
+            </Accordion>
           </Grid>
         </Grid>
       </Paper>
@@ -485,7 +688,7 @@ export default function InvoiceDetail() {
         </DialogActions>
       </Dialog>
 
-      {/* Diálogo de confirmación de reenvío */}
+      {/* Diálogo de confirmación de envío a DGII */}
       <Dialog
         open={resendDialogOpen}
         onClose={() => setResendDialogOpen(false)}
@@ -499,6 +702,25 @@ export default function InvoiceDetail() {
         <DialogActions>
           <Button onClick={() => setResendDialogOpen(false)}>Cancelar</Button>
           <Button onClick={handleResend} color="primary" autoFocus>
+            Enviar
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Diálogo de confirmación de envío por correo */}
+      <Dialog
+        open={emailDialogOpen}
+        onClose={() => setEmailDialogOpen(false)}
+      >
+        <DialogTitle>Confirmar envío por correo</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            ¿Estás seguro de que deseas enviar esta factura por correo a {invoice.email}?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEmailDialogOpen(false)}>Cancelar</Button>
+          <Button onClick={handleSendEmail} color="primary" autoFocus>
             Enviar
           </Button>
         </DialogActions>
