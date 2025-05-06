@@ -6,6 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// Importar utilidades
+const { generateInvoicePDF } = require('./utils/pdfGenerator');
+const { generateInvoiceXML, validateXML, generateXMLFilename } = require('./utils/xmlGenerator');
+const { signXML, verifyXMLSignature, decryptCertificate } = require('./utils/xmlSigner');
+const { sendInvoiceToDGII, simulateDGIISubmission, checkInvoiceStatus, simulateStatusCheck } = require('./utils/dgiiApi');
+
 admin.initializeApp();
 
 /**
@@ -133,7 +139,6 @@ exports.sendInvoiceEmail = functions.https.onCall(async (data, context) => {
  * Cloud Function para enviar facturas a la DGII
  * Recibe: invoiceId
  * Genera el XML, lo firma y lo envía a la DGII
- * En un entorno real, aquí se implementaría la integración con la API de la DGII
  */
 exports.sendInvoiceToDGII = functions.https.onCall(async (data, context) => {
   try {
@@ -145,7 +150,7 @@ exports.sendInvoiceToDGII = functions.https.onCall(async (data, context) => {
       );
     }
 
-    const { invoiceId } = data;
+    const { invoiceId, testMode = true } = data;
 
     if (!invoiceId) {
       throw new functions.https.HttpsError(
@@ -166,27 +171,120 @@ exports.sendInvoiceToDGII = functions.https.onCall(async (data, context) => {
 
     const invoiceData = invoiceSnapshot.data();
     
-    // En un entorno real, aquí se generaría el XML, se firmaría y se enviaría a la DGII
-    // Para este ejemplo, simularemos una respuesta exitosa
-
-    // Generar un TrackID único para la factura
-    const trackId = `DGII-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-
+    // Obtener datos del cliente
+    const clientSnapshot = await admin.firestore().collection('clients').doc(invoiceData.clientId).get();
+    
+    if (!clientSnapshot.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'El cliente especificado no existe.'
+      );
+    }
+    
+    const clientData = clientSnapshot.data();
+    
+    // Obtener datos de la empresa
+    const companySnapshot = await admin.firestore().collection('settings').doc('company').get();
+    
+    if (!companySnapshot.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'No se encontraron datos de la empresa.'
+      );
+    }
+    
+    const companyData = companySnapshot.data();
+    
+    // Generar el XML de la factura
+    const xmlString = generateInvoiceXML(invoiceData, companyData, clientData);
+    
+    // Validar el XML
+    const isValid = validateXML(xmlString);
+    
+    if (!isValid) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'El XML generado no es válido.'
+      );
+    }
+    
+    // Obtener el certificado digital
+    const certificateSnapshot = await admin.firestore().collection('settings').doc('certificate').get();
+    
+    if (!certificateSnapshot.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'No se encontró el certificado digital.'
+      );
+    }
+    
+    const certificateData = certificateSnapshot.data();
+    
+    // Desencriptar el certificado
+    // En un entorno real, la clave de encriptación debería estar en una variable de entorno
+    const encryptionKey = functions.config().certificate?.key || 'default-encryption-key';
+    const certificate = decryptCertificate(certificateData.certificate, encryptionKey);
+    const privateKey = decryptCertificate(certificateData.privateKey, encryptionKey);
+    
+    // Firmar el XML
+    const signedXml = signXML(xmlString, certificate, privateKey, certificateData.password);
+    
+    // Guardar el XML firmado en Storage
+    const bucket = admin.storage().bucket();
+    const xmlFileName = generateXMLFilename(companyData.rnc, invoiceData.invoiceNumber);
+    const tempXmlPath = path.join(os.tmpdir(), xmlFileName);
+    
+    fs.writeFileSync(tempXmlPath, signedXml);
+    
+    await bucket.upload(tempXmlPath, {
+      destination: `invoices/xml/${xmlFileName}`,
+      metadata: {
+        contentType: 'application/xml'
+      }
+    });
+    
+    // Eliminar el archivo temporal
+    fs.unlinkSync(tempXmlPath);
+    
+    // Obtener la URL del XML
+    const xmlFile = bucket.file(`invoices/xml/${xmlFileName}`);
+    const [xmlUrl] = await xmlFile.getSignedUrl({
+      action: 'read',
+      expires: '03-01-2500' // Fecha lejana para una URL "permanente"
+    });
+    
+    // En un entorno real, aquí se enviaría el XML a la DGII
+    // Para este ejemplo, simulamos la respuesta
+    let dgiiResponse;
+    
+    if (testMode) {
+      dgiiResponse = await simulateDGIISubmission(signedXml);
+    } else {
+      // Aquí iría el código para enviar a la DGII real
+      // Obtener credenciales de la DGII
+      const dgiiCredentials = {
+        username: functions.config().dgii?.username || '',
+        password: functions.config().dgii?.password || '',
+        rnc: companyData.rnc,
+        token: '' // Se obtendría con getAuthToken
+      };
+      
+      dgiiResponse = await sendInvoiceToDGII(signedXml, dgiiCredentials, testMode);
+    }
+    
     // Actualizar la factura con la información de la DGII
     await admin.firestore().collection('invoices').doc(invoiceId).update({
       status: 'enviada',
-      trackId: trackId,
+      trackId: dgiiResponse.trackId,
+      xmlUrl: xmlUrl,
       dgiiSubmissionDate: admin.firestore.FieldValue.serverTimestamp(),
-      dgiiResponse: {
-        success: true,
-        trackId: trackId,
-        message: 'Factura recibida correctamente por la DGII'
-      }
+      dgiiResponse: dgiiResponse
     });
 
     return { 
       success: true, 
-      trackId: trackId,
+      trackId: dgiiResponse.trackId,
+      xmlUrl: xmlUrl,
       message: 'Factura enviada correctamente a la DGII'
     };
   } catch (error) {
@@ -228,13 +326,51 @@ exports.generateInvoicePDF = functions.https.onCall(async (data, context) => {
         'La factura especificada no existe.'
       );
     }
-
-    // En un entorno real, aquí se generaría el PDF utilizando una biblioteca como PDFKit o jsPDF
-    // Para este ejemplo, simularemos que se ha generado y guardado correctamente
-
-    // URL simulada del PDF
-    const pdfUrl = `https://storage.googleapis.com/${admin.storage().bucket().name}/invoices/${invoiceId}.pdf`;
-
+    
+    const invoiceData = invoiceSnapshot.data();
+    
+    // Obtener datos del cliente
+    const clientSnapshot = await admin.firestore().collection('clients').doc(invoiceData.clientId).get();
+    
+    if (!clientSnapshot.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'El cliente especificado no existe.'
+      );
+    }
+    
+    const clientData = clientSnapshot.data();
+    
+    // Obtener datos de la empresa
+    const companySnapshot = await admin.firestore().collection('settings').doc('company').get();
+    const companyData = companySnapshot.exists ? companySnapshot.data() : {};
+    
+    // Generar el PDF
+    const pdfBuffer = await generateInvoicePDF(invoiceData, companyData, clientData);
+    
+    // Guardar el PDF en Storage
+    const bucket = admin.storage().bucket();
+    const tempPdfPath = path.join(os.tmpdir(), `invoice_${invoiceId}.pdf`);
+    
+    fs.writeFileSync(tempPdfPath, pdfBuffer);
+    
+    await bucket.upload(tempPdfPath, {
+      destination: `invoices/${invoiceId}.pdf`,
+      metadata: {
+        contentType: 'application/pdf'
+      }
+    });
+    
+    // Eliminar el archivo temporal
+    fs.unlinkSync(tempPdfPath);
+    
+    // Obtener la URL del PDF
+    const pdfFile = bucket.file(`invoices/${invoiceId}.pdf`);
+    const [pdfUrl] = await pdfFile.getSignedUrl({
+      action: 'read',
+      expires: '03-01-2500' // Fecha lejana para una URL "permanente"
+    });
+    
     // Actualizar la factura con la URL del PDF
     await admin.firestore().collection('invoices').doc(invoiceId).update({
       pdfUrl: pdfUrl,
@@ -251,3 +387,127 @@ exports.generateInvoicePDF = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('internal', error.message);
   }
 });
+
+/**
+ * Cloud Function para verificar el estado de una factura en la DGII
+ * Recibe: invoiceId
+ * Consulta el estado de la factura en la DGII y actualiza la información en Firestore
+ */
+exports.checkInvoiceStatus = functions.https.onCall(async (data, context) => {
+  try {
+    // Verificar autenticación
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'El usuario debe estar autenticado para verificar el estado de facturas.'
+      );
+    }
+
+    const { invoiceId, testMode = true } = data;
+
+    if (!invoiceId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Se requiere ID de factura.'
+      );
+    }
+
+    // Obtener datos de la factura
+    const invoiceSnapshot = await admin.firestore().collection('invoices').doc(invoiceId).get();
+    
+    if (!invoiceSnapshot.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'La factura especificada no existe.'
+      );
+    }
+    
+    const invoiceData = invoiceSnapshot.data();
+    
+    if (!invoiceData.trackId) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'La factura no ha sido enviada a la DGII.'
+      );
+    }
+    
+    // Obtener datos de la empresa
+    const companySnapshot = await admin.firestore().collection('settings').doc('company').get();
+    const companyData = companySnapshot.exists ? companySnapshot.data() : {};
+    
+    // Verificar el estado de la factura
+    let statusResponse;
+    
+    if (testMode) {
+      statusResponse = await simulateStatusCheck(invoiceData.trackId);
+    } else {
+      // Aquí iría el código para consultar a la DGII real
+      // Obtener credenciales de la DGII
+      const dgiiCredentials = {
+        username: functions.config().dgii?.username || '',
+        password: functions.config().dgii?.password || '',
+        rnc: companyData.rnc,
+        token: '' // Se obtendría con getAuthToken
+      };
+      
+      statusResponse = await checkInvoiceStatus(invoiceData.trackId, dgiiCredentials, testMode);
+    }
+    
+    // Actualizar la factura con el estado
+    await admin.firestore().collection('invoices').doc(invoiceId).update({
+      status: statusResponse.status.toLowerCase(),
+      dgiiStatusDate: admin.firestore.FieldValue.serverTimestamp(),
+      dgiiStatusResponse: statusResponse
+    });
+    
+    return {
+      success: true,
+      status: statusResponse.status,
+      message: statusResponse.message,
+      data: statusResponse
+    };
+  } catch (error) {
+    console.error('Error al verificar estado de factura:', error);
+    throw new functions.https.HttpsError('internal', error.message);
+  }
+});
+
+/**
+ * Cloud Function que se ejecuta cuando se crea una nueva factura
+ * Genera automáticamente el PDF y envía la factura a la DGII si está configurado
+ */
+exports.onInvoiceCreated = functions.firestore
+  .document('invoices/{invoiceId}')
+  .onCreate(async (snapshot, context) => {
+    try {
+      const invoiceData = snapshot.data();
+      const invoiceId = context.params.invoiceId;
+      
+      // Verificar si la factura está lista para procesamiento automático
+      if (invoiceData.status !== 'pendiente' || invoiceData.autoProcess === false) {
+        return null;
+      }
+      
+      // Generar el PDF automáticamente
+      const generatePdfResult = await exports.generateInvoicePDF({
+        invoiceId
+      }, { auth: { uid: 'system' } });
+      
+      console.log('PDF generado automáticamente:', generatePdfResult);
+      
+      // Verificar si se debe enviar automáticamente a la DGII
+      if (invoiceData.autoSendToDGII === true) {
+        const sendToDGIIResult = await exports.sendInvoiceToDGII({
+          invoiceId,
+          testMode: true // Usar modo de prueba por defecto
+        }, { auth: { uid: 'system' } });
+        
+        console.log('Factura enviada automáticamente a la DGII:', sendToDGIIResult);
+      }
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error en procesamiento automático de factura:', error);
+      return { success: false, error: error.message };
+    }
+  });
